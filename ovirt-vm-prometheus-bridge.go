@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -19,22 +20,22 @@ type Targets struct {
 	Labels  map[string]string `json:"labels"`
 }
 
+var ignoredNodes []string
 
 type Vms struct {
 	Vm []Vm
 }
 
 type Vm struct {
-	Fqdn string
-	Id string
-	Domain Domain
+	Fqdn    string
+	Id      string
+	Domain  Domain
 	Cluster Cluster
 }
 
-type Domain struct{
+type Domain struct {
 	Name string
 }
-
 
 type Hosts struct {
 	Host []Host
@@ -50,14 +51,15 @@ type Cluster struct {
 }
 
 type Config struct {
-	Target         string
-	URL            string
-	User           string
-	Password       string
-	NoVerify       bool
-	EngineCA       string
-	UpdateInterval int
-	TargetPort     int
+	Target           string
+	URL              string
+	User             string
+	Password         string
+	NoVerify         bool
+	EngineCA         string
+	UpdateInterval   int
+	TargetPort       int
+	IgnoredNodesFile string
 }
 
 func main() {
@@ -69,18 +71,30 @@ func main() {
 	engineCa := flag.String("engine-ca", "/etc/pki/ovirt-engine/ca.pem", "Path to engine ca certificate")
 	updateInterval := flag.Int("update-interval", 60, "Update intervall for host discovery in seconds")
 	targetPort := flag.Int("host-port", 9000, "Port where Prometheus metrics are exposed on the hosts")
+	ignoredNodesFile := flag.String("ignored-nodes-file", "ignored-nodes.txt", "File with list of hosts to be ignored")
 	flag.Parse()
 	if *enginePassword == "" {
 		*enginePassword = os.Getenv("ENGINE_PASSWORD")
 	}
 	config := Config{Target: *target,
-		URL:            *engineURL,
-		User:           *engineUser,
-		Password:       *enginePassword,
-		NoVerify:       *noVerify,
-		EngineCA:       *engineCa,
-		UpdateInterval: *updateInterval,
-		TargetPort:     *targetPort,
+		URL:              *engineURL,
+		User:             *engineUser,
+		Password:         *enginePassword,
+		NoVerify:         *noVerify,
+		EngineCA:         *engineCa,
+		UpdateInterval:   *updateInterval,
+		TargetPort:       *targetPort,
+		IgnoredNodesFile: *ignoredNodesFile,
+	}
+
+	file, err := os.Open(config.IgnoredNodesFile)
+	if err != nil {
+		log.Print(err)
+	}
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		ignoredNodes = append(ignoredNodes, scanner.Text())
 	}
 
 	if !strings.HasPrefix(config.URL, "https") {
@@ -106,6 +120,15 @@ func main() {
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
 	client := &http.Client{Transport: transport}
 	Discover(client, &config)
+}
+func isIgnoredNode(node string) bool {
+	set := make(map[string]struct{}, len(ignoredNodes))
+	for _, s := range ignoredNodes {
+		set[s] = struct{}{}
+	}
+
+	_, ok := set[node]
+	return ok
 }
 
 func Discover(client *http.Client, config *Config) {
@@ -163,14 +186,16 @@ func MapToTarget(targetPort int, hosts chan *Vms) chan []*Targets {
 			targetMap := make(map[string]*Targets)
 			var targets []*Targets
 			for _, host := range msg.Vm {
-				if (len(host.Fqdn)==0)||!(strings.Contains(host.Fqdn,"."))  { //Remove templates and VMs with no fqdn. Better way to do this?
-				} else if value, ok := targetMap[host.Cluster.Id];ok {
-					value.Targets = append(value.Targets, host.Fqdn+":"+strconv.Itoa(targetPort))
-				} else {
-					targetMap[host.Cluster.Id] = &Targets{
-						Labels:  map[string]string{"cluster": host.Cluster.Id},
-						Targets: []string{host.Fqdn + ":" + strconv.Itoa(targetPort)}}
-					targets = append(targets, targetMap[host.Cluster.Id])
+				if !isIgnoredNode(host.Fqdn) {
+					if (len(host.Fqdn) == 0) || !(strings.Contains(host.Fqdn, ".")) { //Remove templates and VMs with no fqdn. Better way to do this?
+					} else if value, ok := targetMap[host.Cluster.Id]; ok {
+						value.Targets = append(value.Targets, host.Fqdn+":"+strconv.Itoa(targetPort))
+					} else {
+						targetMap[host.Cluster.Id] = &Targets{
+							Labels:  map[string]string{"cluster": host.Cluster.Id},
+							Targets: []string{host.Fqdn + ":" + strconv.Itoa(targetPort)}}
+						targets = append(targets, targetMap[host.Cluster.Id])
+					}
 				}
 			}
 			targetsChan <- targets
