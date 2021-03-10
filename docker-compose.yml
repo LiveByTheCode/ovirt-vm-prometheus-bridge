@@ -1,5 +1,5 @@
 ovirt-vm-prometheus-bridge:
-  image: igou/ovirt-vm-prometheus-bridge
+  image: livebythecode/ovirt-vm-prometheus-bridge
   volumes:
     - /targets
   command: ["-no-verify", "-engine-url=${ENGINE_HOST}", "-output=/targets/hosts.json"]

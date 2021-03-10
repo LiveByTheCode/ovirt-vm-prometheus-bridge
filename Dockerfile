@@ -1,6 +1,6 @@
 FROM sdurrheimer/alpine-glibc
 
-MAINTAINER David Igou <igou@redhat.com> 
+MAINTAINER Daniel Edwards <daniel.edwards@odfl.com> 
 
 WORKDIR /
 
